@@ -1,0 +1,12 @@
+[package]
+name = "vegas_workshop_sdk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitcoin = "0.32.5"
+bitcoind-async-client = { version = "0.10.0", features = ["raw_rpc"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+char-sdk = { path = "char/sdk/crates/char-sdk", features = ["zmq"] }
+chomp = { path = "chomp" }
+serde_json = "1"

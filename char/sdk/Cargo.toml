@@ -1,0 +1,16 @@
+# Char Rust SDK workspace (contrib/char/sdk)
+# See SDKSPEC.md for full design. Add member crates as they are implemented.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/char-utils",
+    "crates/char-framing",
+    "crates/char-transport",
+    "crates/char-semantics",
+    "crates/char-sdk",
+    # "char-mock",
+    # "char-conformance",
+    "examples/hello-char",
+    # "adapters/char-adapter-alpen",
+]

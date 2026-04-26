@@ -1,0 +1,11 @@
+[package]
+name = "char-framing"
+version = "0.1.0"
+edition = "2021"
+description = "Char SDK - vote and precommit wire formats (encode/decode)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+char-utils = { path = "../char-utils" }

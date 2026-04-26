@@ -1,0 +1,13 @@
+[package]
+name = "hello-char"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal example: domain, vote encode, and SDK flow against a Char node (HTTP transport)"
+
+[[bin]]
+name = "hello-char"
+path = "src/main.rs"
+
+[dependencies]
+char-sdk = { path = "../../crates/char-sdk", features = ["zmq"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }

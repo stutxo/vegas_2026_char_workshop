@@ -1,0 +1,13 @@
+[package]
+name = "char-utils"
+version = "0.1.0"
+edition = "2021"
+description = "Shared utilities for Char SDK (domain hash, hex, helpers)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+bitcoin = { version = "0.32", default-features = false, features = ["std"] }
+hex = "0.4.3"
+sha2 = "0.10.9"

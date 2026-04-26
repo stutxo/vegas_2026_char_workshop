@@ -1,0 +1,28 @@
+[package]
+name = "char-transport"
+version = "0.1.0"
+edition = "2021"
+description = "Char SDK - typed RPC client and ZMQ primitives (no protocol logic)"
+
+[features]
+default = ["bitcoind-client"]
+# RPC transport: HTTP JSON-RPC 1.0 via reqwest (parses body on non-2xx for real RPC errors).
+bitcoind-client = ["dep:reqwest", "dep:tokio"]
+# ZMQ: real subscriber that connects to node, implements ZmqSubscriber.
+zmq = ["dep:zmq", "dep:tokio"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+char-utils = { path = "../char-utils" }
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bitcoin = { version = "0.32", features = ["serde"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+zmq = { version = "0.9", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

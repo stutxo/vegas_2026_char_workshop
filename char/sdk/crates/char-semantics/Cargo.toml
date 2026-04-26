@@ -1,0 +1,24 @@
+[package]
+name = "char-semantics"
+version = "0.1.0"
+edition = "2021"
+description = "Char protocol logic: domain, progress, sync, submit, retry, gaps"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+zmq = ["char-transport/zmq"]
+
+[dependencies]
+char-framing = { path = "../char-framing" }
+char-transport = { path = "../char-transport" }
+char-utils = { path = "../char-utils" }
+bitcoin = "0.32"
+thiserror = "1.0"
+async-trait = "0.1"
+tokio = { version = "1", features = ["time", "rt", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "time"] }

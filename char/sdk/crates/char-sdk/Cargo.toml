@@ -1,0 +1,24 @@
+[package]
+name = "char-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Char SDK - single crate for integrators (re-exports transport, semantics, framing, utils)"
+
+[features]
+# ZMQ subscriber implementation (ZmqSubSocket) and run_zmq runner.
+zmq = ["char-transport/zmq", "char-semantics/zmq"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = "0.1"
+bitcoin = "0.32"
+char-framing = { path = "../char-framing" }
+char-semantics = { path = "../char-semantics" }
+char-transport = { path = "../char-transport" }
+char-utils = { path = "../char-utils" }
+
+[dev-dependencies]
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt", "macros"] }
