@@ -16,8 +16,6 @@ mod inner {
     use char_utils::{HexParseError, ShortDiag, bytes_to_hex};
     use std::collections::HashSet;
 
-    const IMPOSSIBLE_ROLL_TAG: u8 = 2;
-
     fn handler_denied(error: impl std::fmt::Display) -> SemanticsError {
         SemanticsError::Reconcile(ReconcileError::HandlerDenied(ShortDiag::truncate(
             &error.to_string(),
@@ -47,24 +45,6 @@ mod inner {
             .map_err(cursor_advance_denied)?;
         *next_ballot = next;
         Ok(())
-    }
-
-    async fn apply_observed_roll<D: CharBallotHandlers + CharReconcileCursor>(
-        handlers: &mut D,
-        next_ballot: &mut u64,
-        roll: ObservedRoll,
-    ) -> Result<(), SemanticsError> {
-        let ballot = roll.ballot;
-        let next = ballot.saturating_add(1);
-        if roll.tag == Some(IMPOSSIBLE_ROLL_TAG) || roll.payload.is_empty() {
-            return advance_next_ballot(handlers, next_ballot, next).await;
-        }
-
-        handlers
-            .on_roll_observed(roll)
-            .await
-            .map_err(handler_denied)?;
-        advance_next_ballot(handlers, next_ballot, next).await
     }
 
     /// Fetch one decided ballot via RPC, apply/skip it, and advance `next_ballot`.
@@ -268,38 +248,15 @@ mod inner {
                 }
                 Ok(msg) = roll_sub.recv() => match process_zmq_decision_roll_message(msg, &mut seq) {
                     Ok(e) if e.domain == domain_id => match &e.kind {
-                        DecisionRollEventKind::Observed { tag, serialized, payload } => {
+                        DecisionRollEventKind::Observed { tag, serialized } => {
                             if zmq_verbose {
                                 println!(
-                                    "DecodedDecisionRollData{{tag:{}, ballot:{}, payload_len:{}, roll_len:{}}}",
+                                    "DecodedDecisionRollNotification{{tag:{}, roll_len:{}}}",
                                     tag,
-                                    e.ballot,
-                                    payload.len(),
                                     serialized.len()
                                 );
                             }
-                            if e.ballot < next_ballot {
-                                continue;
-                            }
-                            if e.ballot > next_ballot {
-                                reconcile_to_tip(transport, domain_hex, handlers, &mut next_ballot).await?;
-                                if e.ballot != next_ballot {
-                                    continue;
-                                }
-                            }
-                            apply_observed_roll(
-                                handlers,
-                                &mut next_ballot,
-                                ObservedRoll {
-                                    ballot: e.ballot,
-                                    payload: payload.clone(),
-                                    serialized_roll: Some(serialized.clone()),
-                                    roll_hash: None,
-                                    data_hash: None,
-                                    tag: Some(*tag),
-                                },
-                            )
-                            .await?;
+                            reconcile_to_tip(transport, domain_hex, handlers, &mut next_ballot).await?;
                         }
                         DecisionRollEventKind::Gap(_) => {
                             reconcile_to_tip(transport, domain_hex, handlers, &mut next_ballot).await?;

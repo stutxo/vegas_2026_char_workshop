@@ -376,13 +376,12 @@ pub enum ProgressError {
 
 pub struct DecisionRollStreamEvent {
     pub domain: DomainId,
-    pub ballot: u64,
     pub kind: DecisionRollEventKind,
 }
 
 pub enum DecisionRollEventKind {
-    /// Raw roll data received (e.g. from ZMQ); not yet verified.
-    Observed { serialized: Vec<u8>, payload: Vec<u8>, tag: u8 },
+    /// Roll notification received from ZMQ; ballot/payload are resolved through RPC reconciliation.
+    Observed { serialized: Vec<u8>, tag: u8 },
     /// Gap or invalid sequence detected; caller must reconcile and reset.
     Gap(GapReason),
 }
@@ -401,7 +400,7 @@ pub enum DecisionRollParseError {
 }
 ```
 
-- **Sync driver:** Consumes `CharRpcTransport` + optional `ZmqSubscriber`; on ZMQ message, parses and emits `DecisionRollStreamEvent`; on `Gap`, sets internal state to "requires_reset" and returns error; caller must call `reconcile_via_rpc` and then `reset` before processing further.
+- **Sync driver:** Consumes `CharRpcTransport` + optional `ZmqSubscriber`; on ZMQ message, parses the domain/tag/serialized roll notification, then reconciles via RPC to resolve ballot/payload before invoking app handlers; on `Gap`, sets internal state to "requires_reset" and returns error; caller must call `reconcile_via_rpc` and then `reset` before processing further.
 
 ### 4.4 Reset and Reconciliation
 

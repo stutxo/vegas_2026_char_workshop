@@ -9,7 +9,8 @@ use super::{
         probe_bitcoin_mempool_acceptance, send_bitcoin_transaction,
     },
     tx::{
-        build_bitcoin_inscription_artifacts, build_signed_bitcoin_reveal_tx, find_bitcoin_output,
+        build_bitcoin_inscription_artifacts, build_signed_bitcoin_reveal_tx,
+        build_signed_bitcoin_reveal_tx_async, find_bitcoin_output,
         validate_bitcoin_inscription_cluster_size,
     },
     types::{
@@ -121,7 +122,7 @@ impl BitcoinDa {
         )?;
         validate_bitcoin_inscription_cluster_size(&commit_tx, &provisional_reveal_tx)?;
         let reveal_tx = if grind_reveal_prefix {
-            build_signed_bitcoin_reveal_tx(
+            build_signed_bitcoin_reveal_tx_async(
                 runtime.secp,
                 &BitcoinRevealBuildRequest {
                     commit_txid: commit_tx.compute_txid(),
@@ -132,7 +133,8 @@ impl BitcoinDa {
                     fee_sats: reveal_fee_sats,
                     target_prefix: Some(runtime.target_prefix),
                 },
-            )?
+            )
+            .await?
         } else {
             provisional_reveal_tx
         };
@@ -146,7 +148,7 @@ impl BitcoinDa {
         })
     }
 
-    fn build_reveal_tx_at_rate(
+    async fn build_reveal_tx_at_rate(
         &self,
         runtime: BitcoinRuntime<'_>,
         candidate: &BitcoinInscriptionCandidate,
@@ -161,7 +163,7 @@ impl BitcoinDa {
             &candidate.reveal_destination,
             sat_per_vb,
         )?;
-        build_signed_bitcoin_reveal_tx(
+        build_signed_bitcoin_reveal_tx_async(
             runtime.secp,
             &BitcoinRevealBuildRequest {
                 commit_txid,
@@ -173,6 +175,7 @@ impl BitcoinDa {
                 target_prefix: Some(runtime.target_prefix),
             },
         )
+        .await
     }
 
     async fn write_inscription_only_payload(
@@ -227,7 +230,8 @@ impl BitcoinDa {
                 let reveal_tx = if reveal_rate == fee_rate {
                     candidate.reveal_tx.clone()
                 } else {
-                    self.build_reveal_tx_at_rate(runtime, &candidate, commit_txid, reveal_rate)?
+                    self.build_reveal_tx_at_rate(runtime, &candidate, commit_txid, reveal_rate)
+                        .await?
                 };
                 let (reveal_allowed, reveal_reason, reveal_details) =
                     probe_bitcoin_mempool_acceptance(&self.client, &reveal_tx).await?;

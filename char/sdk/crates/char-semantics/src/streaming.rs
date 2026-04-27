@@ -8,12 +8,10 @@
 //! multipart (topic, body, 4-byte LE sequence number). The sequence increments
 //! per message per topic; we detect gaps via `GapReason::SequenceDiscontinuity`.
 //!
-//! Body format: domain (32 bytes) + **CompactSize** leaf tag + **CompactSize** ballot
-//! + **CompactSize** payload length + payload bytes + serialized roll.
+//! Body format: domain (32 bytes) + 1-byte leaf tag + serialized roll bytes.
 
 use crate::domain::DomainId;
 use crate::error::SemanticsError;
-use char_framing::read_compact_size_from_slice;
 use char_transport::{ZmqMessage, ZmqSubscriber};
 use thiserror::Error;
 
@@ -21,19 +19,14 @@ use thiserror::Error;
 #[derive(Debug, Clone)]
 pub struct DecisionRollStreamEvent {
     pub domain: DomainId,
-    pub ballot: u64,
     pub kind: DecisionRollEventKind,
 }
 
 /// Observed roll data or a gap/error that requires reset and reconcile.
 #[derive(Debug, Clone)]
 pub enum DecisionRollEventKind {
-    /// Roll data received from ZMQ; payload is app-owned and not yet verified by the app.
-    Observed {
-        serialized: Vec<u8>,
-        payload: Vec<u8>,
-        tag: u8,
-    },
+    /// Roll notification received from ZMQ; payload and ballot are resolved via RPC reconciliation.
+    Observed { serialized: Vec<u8>, tag: u8 },
     /// Gap or invalid sequence; caller must reconcile and reset.
     Gap(GapReason),
 }
@@ -63,20 +56,8 @@ pub enum DecisionRollParseError {
     #[error("decisionroll domain slice invalid")]
     DomainSlice,
 
-    #[error("decisionroll tag CompactSize")]
-    TagCompactSize,
-
-    #[error("decisionroll ballot CompactSize")]
-    BallotCompactSize,
-
-    #[error("decisionroll payload length CompactSize")]
-    PayloadLengthCompactSize,
-
-    #[error("decisionroll payload length overflows usize")]
-    PayloadLengthOverflow,
-
-    #[error("decisionroll payload truncated")]
-    PayloadTruncated,
+    #[error("decisionroll leaf tag missing")]
+    TagMissing,
 }
 
 /// Decode Bitcoin Core ZMQ sequence from the 4-byte LE suffix.
@@ -92,8 +73,10 @@ pub fn zmq_sequence_from_core(seq: &[u8; 4]) -> u32 {
 /// On mismatch returns `Err(Gap(SequenceDiscontinuity))`.
 /// Updates `expected_sequence` to `got + 1` for the next call.
 ///
-/// Body format (Bitcoin Core decisionroll): first 32 bytes = domain hash, then **CompactSize** leaf tag,
-/// **CompactSize** ballot, **CompactSize** payload length, payload bytes, and serialized roll.
+/// Body format (Bitcoin Core decisionroll): first 32 bytes = domain hash, then
+/// 1-byte leaf tag and serialized roll bytes. The ZMQ body does not carry the
+/// ballot number or resolved payload; runners must reconcile through RPC before
+/// invoking application handlers.
 pub fn process_zmq_decision_roll_message(
     message: ZmqMessage,
     expected_sequence: &mut Option<u32>,
@@ -121,51 +104,17 @@ pub fn process_zmq_decision_roll_message(
         SemanticsError::Gap(GapReason::ParseError(DecisionRollParseError::DomainSlice))
     })?;
     let domain = DomainId(domain);
-    let (tag_val, tag_len) = read_compact_size_from_slice(&body[32..]).ok_or_else(|| {
-        SemanticsError::Gap(GapReason::ParseError(
-            DecisionRollParseError::TagCompactSize,
-        ))
-    })?;
-    let tag = tag_val.min(255) as u8;
-    let after_tag = 32 + tag_len;
-    let (ballot, ballot_len) =
-        read_compact_size_from_slice(&body[after_tag..]).ok_or_else(|| {
-            SemanticsError::Gap(GapReason::ParseError(
-                DecisionRollParseError::BallotCompactSize,
-            ))
-        })?;
-    let after_ballot = after_tag + ballot_len;
-    let (payload_len, payload_len_len) = read_compact_size_from_slice(&body[after_ballot..])
-        .ok_or_else(|| {
-            SemanticsError::Gap(GapReason::ParseError(
-                DecisionRollParseError::PayloadLengthCompactSize,
-            ))
-        })?;
-    let payload_len: usize = payload_len.try_into().map_err(|_| {
-        SemanticsError::Gap(GapReason::ParseError(
-            DecisionRollParseError::PayloadLengthOverflow,
-        ))
-    })?;
-    let payload_start = after_ballot + payload_len_len;
-    let payload_end = payload_start.checked_add(payload_len).ok_or_else(|| {
-        SemanticsError::Gap(GapReason::ParseError(
-            DecisionRollParseError::PayloadLengthOverflow,
-        ))
-    })?;
-    if payload_end > body.len() {
+
+    let Some((&tag, serialized)) = body[32..].split_first() else {
         return Err(SemanticsError::Gap(GapReason::ParseError(
-            DecisionRollParseError::PayloadTruncated,
+            DecisionRollParseError::TagMissing,
         )));
-    }
-    let payload = body[payload_start..payload_end].to_vec();
-    let serialized = body[payload_end..].to_vec();
+    };
 
     Ok(DecisionRollStreamEvent {
         domain,
-        ballot,
         kind: DecisionRollEventKind::Observed {
-            serialized,
-            payload,
+            serialized: serialized.to_vec(),
             tag,
         },
     })
@@ -192,14 +141,12 @@ mod tests {
         let domain = DomainId::from_preimage(b"d");
         let ev = DecisionRollStreamEvent {
             domain,
-            ballot: 1,
             kind: DecisionRollEventKind::Observed {
                 serialized: vec![0, 1, 2],
-                payload: vec![3, 4, 5],
                 tag: 0,
             },
         };
-        assert_eq!(ev.ballot, 1);
+        assert_eq!(ev.domain, domain);
     }
 
     #[test]
@@ -247,9 +194,6 @@ mod tests {
         let mut expected = Some(2u32);
         let mut body = vec![0u8; 32];
         body.push(1);
-        body.push(7);
-        body.push(3);
-        body.extend_from_slice(&[4, 5, 6]);
         body.extend_from_slice(&[9, 8]);
         let msg = ZmqMessage {
             topic: b"decisionroll".to_vec(),
@@ -258,10 +202,33 @@ mod tests {
         };
         let ev = process_zmq_decision_roll_message(msg, &mut expected).unwrap();
         assert_eq!(expected, Some(3));
-        assert_eq!(ev.ballot, 7);
-        assert!(matches!(
-            ev.kind,
-            DecisionRollEventKind::Observed { tag: 1, .. }
-        ));
+        match ev.kind {
+            DecisionRollEventKind::Observed { tag, serialized } => {
+                assert_eq!(tag, 1);
+                assert_eq!(serialized, vec![9, 8]);
+            }
+            DecisionRollEventKind::Gap(_) => panic!("expected observed event"),
+        }
+    }
+
+    #[test]
+    fn process_zmq_message_preserves_serialized_roll_bytes() {
+        let mut expected = Some(2u32);
+        let mut body = vec![0u8; 32];
+        body.push(1);
+        body.extend_from_slice(&[0xe3, 0xf2, 0xe5, 0x0f]);
+        let msg = ZmqMessage {
+            topic: b"decisionroll".to_vec(),
+            body,
+            sequence: 2u32.to_le_bytes(),
+        };
+        let ev = process_zmq_decision_roll_message(msg, &mut expected).unwrap();
+        match ev.kind {
+            DecisionRollEventKind::Observed { tag, serialized } => {
+                assert_eq!(tag, 1);
+                assert_eq!(serialized, vec![0xe3, 0xf2, 0xe5, 0x0f]);
+            }
+            DecisionRollEventKind::Gap(_) => panic!("expected observed event"),
+        }
     }
 }

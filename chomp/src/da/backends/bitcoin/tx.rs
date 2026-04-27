@@ -22,6 +22,7 @@ use ::bitcoin::{
 };
 use anyhow::Context;
 use std::time::Instant;
+use tokio::task;
 use tracing::info;
 
 fn push_bytes(data: &[u8]) -> Result<PushBytesBuf, DaError> {
@@ -197,6 +198,30 @@ pub(super) fn apply_bitcoin_txid_prefix(
     tx: &mut Transaction,
     target_prefix: &TxidPrefix,
 ) -> Result<(), DaError> {
+    let nonce = grind_bitcoin_txid_prefix_nonce(tx, target_prefix)?;
+    tx.lock_time = absolute::LockTime::from_consensus(nonce);
+    Ok(())
+}
+
+pub(super) async fn apply_bitcoin_txid_prefix_async(
+    tx: &mut Transaction,
+    target_prefix: &TxidPrefix,
+) -> Result<(), DaError> {
+    let tx_for_grind = tx.clone();
+    let target_prefix = *target_prefix;
+    let nonce = task::spawn_blocking(move || {
+        grind_bitcoin_txid_prefix_nonce(&tx_for_grind, &target_prefix)
+    })
+    .await
+    .map_err(|err| RuntimeError::Internal(format!("Bitcoin txid grind task failed: {err}")))??;
+    tx.lock_time = absolute::LockTime::from_consensus(nonce);
+    Ok(())
+}
+
+fn grind_bitcoin_txid_prefix_nonce(
+    tx: &Transaction,
+    target_prefix: &TxidPrefix,
+) -> Result<u32, DaError> {
     let start = Instant::now();
     let prefix_hex = hex::encode(target_prefix);
     info!(
@@ -211,21 +236,20 @@ pub(super) fn apply_bitcoin_txid_prefix(
             hex::encode(target_prefix)
         ))
     })?;
-    tx.lock_time = absolute::LockTime::from_consensus(nonce);
     info!(
         prefix = %prefix_hex,
         nonce,
         elapsed_ms = start.elapsed().as_millis(),
         "Matched Bitcoin txid prefix"
     );
-    Ok(())
+    Ok(nonce)
 }
 
-pub(super) fn build_signed_bitcoin_reveal_tx(
+fn build_unsigned_and_provisional_bitcoin_reveal_tx(
     secp: &Secp256k1<All>,
     request: &BitcoinRevealBuildRequest<'_>,
-) -> Result<Transaction, DaError> {
-    let mut unsigned_reveal_tx = build_bitcoin_reveal_tx(
+) -> Result<(Transaction, Transaction), DaError> {
+    let unsigned_reveal_tx = build_bitcoin_reveal_tx(
         request.commit_txid,
         request.commit_output_vout,
         request.commit_output,
@@ -250,8 +274,40 @@ pub(super) fn build_signed_bitcoin_reveal_tx(
         .into());
     }
 
+    Ok((unsigned_reveal_tx, provisional_reveal_tx))
+}
+
+pub(super) fn build_signed_bitcoin_reveal_tx(
+    secp: &Secp256k1<All>,
+    request: &BitcoinRevealBuildRequest<'_>,
+) -> Result<Transaction, DaError> {
+    let (mut unsigned_reveal_tx, provisional_reveal_tx) =
+        build_unsigned_and_provisional_bitcoin_reveal_tx(secp, request)?;
+
     if let Some(target_prefix) = request.target_prefix {
         apply_bitcoin_txid_prefix(&mut unsigned_reveal_tx, target_prefix)?;
+        sign_bitcoin_scriptspend_tx(
+            secp,
+            unsigned_reveal_tx,
+            request.commit_output.clone(),
+            &request.artifacts.tapscript,
+            &request.artifacts.spend_info,
+            &request.artifacts.reveal_keypair,
+        )
+    } else {
+        Ok(provisional_reveal_tx)
+    }
+}
+
+pub(super) async fn build_signed_bitcoin_reveal_tx_async(
+    secp: &Secp256k1<All>,
+    request: &BitcoinRevealBuildRequest<'_>,
+) -> Result<Transaction, DaError> {
+    let (mut unsigned_reveal_tx, provisional_reveal_tx) =
+        build_unsigned_and_provisional_bitcoin_reveal_tx(secp, request)?;
+
+    if let Some(target_prefix) = request.target_prefix {
+        apply_bitcoin_txid_prefix_async(&mut unsigned_reveal_tx, target_prefix).await?;
         sign_bitcoin_scriptspend_tx(
             secp,
             unsigned_reveal_tx,

@@ -31,14 +31,12 @@ fn stream_event_kind_and_gap_reason_from_semantics() {
     let domain = DomainId::from_preimage(b"d");
     let ev = DecisionRollStreamEvent {
         domain,
-        ballot: 1,
         kind: DecisionRollEventKind::Observed {
             serialized: vec![0, 1],
-            payload: vec![2, 3],
             tag: 0,
         },
     };
-    assert_eq!(ev.ballot, 1);
+    assert_eq!(ev.domain, domain);
     let gap = GapReason::MissingBallot { expected: 2 };
     let err = SemanticsError::Gap(gap);
     assert!(err.to_string().contains("gap"));
